@@ -31,7 +31,11 @@ log = logging.getLogger(__name__)
 VOLUME_ACCESS_MODE_MAP = {"rom": ["ReadOnlyMany"], "rwo": ["ReadWriteOnce"],
                           "rwm": ["ReadWriteMany"]}
 DEFAULT_VOLUME_ACCESS_MODE = VOLUME_ACCESS_MODE_MAP["rwm"]
-
+CACHE_POLICY_STEP = "caching_policy"
+# The key looked for in the stdout of a cache policy cell's json dump.
+CACHE_POLICY_INVALIDATION_KEY = "invalidation_tags"
+CACHE_POLICY_ALL = "*"
+CACHE_POLICY_NONE = "~"
 
 class VolumeConfig(Config):
     """Used for validating the `volumes` field of NotebookConfig."""
@@ -115,6 +119,10 @@ class PipelineConfig(Config):
                               validators.VolumeAccessModeValidator])
     timeout = Field(type=int, validators=[validators.PositiveIntegerValidator])
 
+    # Cache invalidation policy defaults to no-invalidation. This is the
+    # standard case where no special cache policy cell is defined.
+    cache_invalidation_tag = Field(type=str, default=CACHE_POLICY_NONE)
+
     @property
     def source_path(self):
         """Get the path to the main entry point script."""
@@ -132,6 +140,25 @@ class PipelineConfig(Config):
     def _randomize_pipeline_name(self):
         self.pipeline_name = "%s-%s" % (self.pipeline_name,
                                         utils.random_string())
+
+    def _set_cache_invalidation_tag(self, func):
+        import json
+        import sys
+        from io import StringIO
+        old_stdout = sys.stdout
+        sys.stdout = mystdout = StringIO()
+        exec(func)
+        sys.stdout = old_stdout
+        # TODO: match this with the format in the ipynb using API objects (eg:
+        # protobuf).
+        try:
+            self.cache_invalidation_tag = json.loads(
+                    mystdout.getvalue().rstrip("\n"))[CACHE_POLICY_INVALIDATION_KEY]
+        except:
+            # If there's a cache policy cell but we don't find the cache_policy
+            # key, blindly invalidate all steps.
+            self.cache_invalidation_tag = CACHE_POLICY_ALL
+        log.info("Cache invalidation tag set to %s" % self.cache_invalidation_tag)
 
     def _set_docker_image(self):
         if not self.docker_image:
@@ -223,6 +250,8 @@ class Pipeline(nx.DiGraph):
             raise RuntimeError("Step with name '%s' already exists"
                                % step.name)
         self.add_node(step.name, step=step)
+        if step.name == CACHE_POLICY_STEP:
+            self.config._set_cache_invalidation_tag(step.source[0])
 
     def add_dependency(self, parent: Step, child: Step):
         """Link two Steps in the pipeline."""

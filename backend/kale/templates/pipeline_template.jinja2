@@ -172,6 +172,12 @@ def auto_generated_pipeline({%- for arg in pipeline.pps_names -%}
     {%- endif %}
     _kale_{{ step.name }}_task.output_artifact_paths.update(_kale_output_artifacts)
     _kale_{{ step.name }}_task.add_pod_label("pipelines.kubeflow.org/metadata_written", "true")
+
+    {%- if step.name.endswith(pipeline.config.cache_invalidation_tag) or step.name == "caching_policy" or pipeline.config.cache_invalidation_tag == "*" %}
+    _kale_{{ step.name }}_task.execution_options.caching_strategy.max_cache_staleness = "P0D"
+    {%- endif %}
+
+
     _kale_dep_names = (_kale_{{ step.name }}_task.dependent_names +
                        _kale_volume_step_names)
     _kale_{{ step.name }}_task.add_pod_annotation(
